@@ -3363,15 +3363,18 @@ async function loadDriveGallery() {
   const track = document.getElementById('scTrack');
   if (!track) return;
   try {
-    const cls    = localStorage.getItem('mmi_class') || '';
-    const res    = await fetch(`${APPS_SCRIPT_URL}?type=gallery&class=${cls}`);
+    const cls      = localStorage.getItem('mmi_class') || '';
+    const username = (localStorage.getItem('mmi_user') || '').toLowerCase().replace(/\s+/g, '');
+    const res    = await fetch(`${APPS_SCRIPT_URL}?type=gallery&class=${cls}&student=${username}`);
     const data   = await res.json();
     const images = data.images || [];
     if (!images.length) return;
 
-    track.innerHTML = images.map(img =>
-      `<div class="sc-slide"><img src="${img.url}" alt="${img.name}" loading="lazy"/></div>`
+    track.innerHTML = images.map((img, i) =>
+      `<div class="sc-slide"><img src="${img.url}" alt="${img.name}" loading="lazy" ondblclick="openLightbox(${i})"/></div>`
     ).join('');
+
+    lbImages = images.map(img => ({ src: img.url, alt: img.name }));
 
     scIdx = 0;
     initCarousel();
@@ -3436,10 +3439,11 @@ async function loadNotifications() {
   const csvToParse = hasHeader ? text : 'date,type,class,message\n' + text;
   const rows = parseCSV(csvToParse);
 
-  // Filter: show rows where class matches student key or is "all"
+  // Filter: show rows for everyone, this class, or this specific student
+  const username = (localStorage.getItem('mmi_user') || '').toLowerCase().replace(/\s+/g, '');
   const filtered = rows.filter(r => {
     const cls = (r.class || '').toLowerCase().trim();
-    return cls === 'all' || cls === studentKey;
+    return cls === 'all' || cls === studentKey || cls === username;
   });
 
   if (!filtered.length) {
@@ -3455,26 +3459,11 @@ async function loadNotifications() {
   });
 
   list.innerHTML = filtered.map(r => {
-    const type    = (r.type || 'general').toLowerCase().trim();
     const message = r.message || r.text || '';
     const date    = r.date || '';
 
-    let itemClass = 'ns-item';
-    let tagClass  = 'ns-type';
-    let tagLabel  = 'General';
-
-    if (type === 'urgent') {
-      itemClass += ' urgent';
-      tagClass  += ' urgent-type';
-      tagLabel   = 'Urgent';
-    } else if (type === 'holiday') {
-      tagClass += ' holiday-type';
-      tagLabel  = 'Holiday';
-    }
-
     return `
-      <div class="${itemClass}">
-        <span class="${tagClass}">${tagLabel}</span>
+      <div class="ns-item">
         <p>${message}</p>
         <span class="ns-time">${date}</span>
       </div>`;
@@ -3536,7 +3525,8 @@ async function loadSchoolCalendar() {
   let data = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(APPS_SCRIPT_URL + '?type=calpdfs&class=' + studentKey + '&_=' + Date.now());
+      const section = (localStorage.getItem('mmi_section') || '').toLowerCase().trim();
+      const res = await fetch(APPS_SCRIPT_URL + '?type=calpdfs&class=' + studentKey + '&section=' + section + '&_=' + Date.now());
       if (!res.ok) { await new Promise(r => setTimeout(r, 600)); continue; }
       const j = await res.json();
       if (j && j.pdfs) { data = j; break; }

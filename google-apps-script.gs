@@ -41,11 +41,11 @@ function doGet(e) {
   const cls     = (e.parameter.class   || '').toLowerCase().trim();
 
   let result;
-  if      (type === 'gallery')   result = getGalleryImages(cls);
+  if      (type === 'gallery')   result = getGalleryImages(cls, student);
   else if (type === 'attendance') result = getAttendance(student);
   else if (type === 'getcreds')  result = getCredentials((e.parameter.key || '').toLowerCase().trim());
   else if (type === 'finduser')  result = findByUsername((e.parameter.username || '').toLowerCase().replace(/\s+/g, '').trim());
-  else if (type === 'calpdfs')   result = getCalendarPDFs(cls);
+  else if (type === 'calpdfs')   result = getCalendarPDFs(cls, (e.parameter.section || '').toLowerCase().trim());
   else                           result = { error: 'Unknown type' };
 
   return ContentService
@@ -83,9 +83,10 @@ function doPost(e) {
 
 // ── CALENDAR PDFs ─────────────────────────────────────────
 // Returns { pdfs: [{id, name, month}] } for the given class key (k/n/p).
-// Scans the matching subfolder inside CALENDAR_PDF_FOLDER_ID.
-// Month is parsed from the PDF filename.
-function getCalendarPDFs(cls) {
+// PDFs directly in the class subfolder → all students in that class.
+// PDFs in a subfolder named after the section → that section only.
+// Section PDFs override class-wide PDFs for the same month.
+function getCalendarPDFs(cls, section) {
   try {
     const root = DriveApp.getFolderById(CALENDAR_PDF_FOLDER_ID);
     const subs = root.getFolders();
@@ -95,16 +96,29 @@ function getCalendarPDFs(cls) {
       const code = _classFromFolderName(sub.getName());
       if (!code || _classFolderKey(code) !== cls) continue;
 
-      const pdfs  = [];
-      const files = sub.getFiles();
-      while (files.hasNext()) {
-        const f = files.next();
-        if (f.getMimeType() !== MimeType.PDF) continue;
-        const name  = f.getName().replace(/^DONE_/i, '');
-        const month = _monthFromFilename(name);
-        if (month) pdfs.push({ id: f.getId(), name: name, month: month });
+      const pdfMap = {}; // month → {id, name, month}
+
+      function collectPDFs(folder) {
+        const files = folder.getFiles();
+        while (files.hasNext()) {
+          const f = files.next();
+          if (f.getMimeType() !== MimeType.PDF) continue;
+          const name  = f.getName().replace(/^DONE_/i, '');
+          const month = _monthFromFilename(name);
+          if (month) pdfMap[month] = { id: f.getId(), name: name, month: month };
+        }
       }
-      pdfs.sort((a, b) => a.month.localeCompare(b.month));
+
+      // Class-wide PDFs (root of class folder)
+      collectPDFs(sub);
+
+      // Section-specific PDFs override class-wide ones for the same month
+      if (section) {
+        const secSubs = sub.getFoldersByName(section);
+        if (secSubs.hasNext()) collectPDFs(secSubs.next());
+      }
+
+      const pdfs = Object.values(pdfMap).sort((a, b) => a.month.localeCompare(b.month));
       return { pdfs: pdfs };
     }
     return { pdfs: [] };
@@ -232,7 +246,9 @@ function updateCredentials(key, currentPass, defaultPass, newUsername, newPasswo
 }
 
 // ── GALLERY ───────────────────────────────────────────────
-function getGalleryImages(cls) {
+// Images directly in the class folder → visible to the whole class.
+// Images inside a subfolder named after the student's username → that student only.
+function getGalleryImages(cls, student) {
   try {
     const normalised = (cls === 'playgroup' || cls === 'toddlers') ? 'pre-nursery' : cls;
     const folderId   = CLASS_FOLDERS[normalised];
@@ -240,20 +256,32 @@ function getGalleryImages(cls) {
       return { images: [], error: 'No folder configured for class: ' + cls };
     }
     const folder = DriveApp.getFolderById(folderId);
-    const files  = folder.getFiles();
     const images = [];
 
-    while (files.hasNext()) {
-      const file = files.next();
-      if (file.getMimeType().startsWith('image/')) {
-        const id = file.getId();
-        images.push({
-          id:   id,
-          name: file.getName(),
-          url:  'https://drive.google.com/thumbnail?id=' + id + '&sz=w800'
-        });
+    function collectImages(f) {
+      const files = f.getFiles();
+      while (files.hasNext()) {
+        const file = files.next();
+        if (file.getMimeType().startsWith('image/')) {
+          const id = file.getId();
+          images.push({
+            id:   id,
+            name: file.getName(),
+            url:  'https://drive.google.com/thumbnail?id=' + id + '&sz=w800'
+          });
+        }
       }
     }
+
+    // Class-wide images (root of class folder)
+    collectImages(folder);
+
+    // Student-specific images (subfolder named after username)
+    if (student) {
+      const subs = folder.getFoldersByName(student);
+      if (subs.hasNext()) collectImages(subs.next());
+    }
+
     images.sort((a, b) => a.name.localeCompare(b.name));
     return { images: images };
   } catch (err) {
